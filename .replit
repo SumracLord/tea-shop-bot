@@ -1,0 +1,9 @@
+run = "python start_cloud.py"
+entrypoint = "start_cloud.py"
+modules = ["python-3.13"]
+
+[env]
+PYTHONUNBUFFERED = "1"
+
+[deployment]
+run = ["python", "start_cloud.py"]
