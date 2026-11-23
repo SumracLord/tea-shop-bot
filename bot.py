@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 
 from config import (
     BOT_TOKEN,
+    HTTPS_PROXY,
     KIBERSHCHIT_SOCKS_HOST,
     KIBERSHCHIT_SOCKS_PORT,
     SKIP_TELEGRAM,
@@ -385,9 +386,9 @@ def create_bot() -> Bot:
                 "  python3.13 -m pip install aiohttp-socks"
             )
         session = AiohttpSession(proxy=proxy)
-        if not TELEGRAM_PROXY:
+        if not TELEGRAM_PROXY and not HTTPS_PROXY:
             logger.warning(
-                "TELEGRAM_PROXY не задан — использую локальный SOCKS Киберщита: %s",
+                "TELEGRAM_PROXY и HTTPS_PROXY не заданы — использую локальный SOCKS Киберщита: %s",
                 proxy,
             )
 

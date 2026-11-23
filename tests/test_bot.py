@@ -385,6 +385,28 @@ def test_get_telegram_proxy_prefers_explicit_value(monkeypatch):
     assert config.get_telegram_proxy() == "http://127.0.0.1:8080"
 
 
+def test_get_telegram_proxy_falls_back_to_https_proxy(monkeypatch):
+    monkeypatch.setattr(config, "TELEGRAM_PROXY", "")
+    monkeypatch.setattr(config, "HTTPS_PROXY", "http://proxy.server:3128")
+    monkeypatch.setattr(config, "SKIP_TELEGRAM", False)
+    assert config.get_telegram_proxy() == "http://proxy.server:3128"
+
+
+@pytest.mark.asyncio
+async def test_create_bot_uses_https_proxy(monkeypatch):
+    monkeypatch.setattr(bot, "BOT_TOKEN", "123456789:" + "A" * 35)
+    monkeypatch.setattr(bot, "SKIP_TELEGRAM", False)
+    monkeypatch.setattr(bot, "TELEGRAM_PROXY", "")
+    monkeypatch.setattr(config, "TELEGRAM_PROXY", "")
+    monkeypatch.setattr(config, "HTTPS_PROXY", "http://proxy.server:3128")
+    monkeypatch.setattr(bot, "HTTPS_PROXY", "http://proxy.server:3128")
+    instance = bot.create_bot()
+    try:
+        assert instance.session.proxy == "http://proxy.server:3128"
+    finally:
+        await instance.session.close()
+
+
 def test_get_telegram_proxy_autodetects_kibershchit(monkeypatch):
     monkeypatch.setattr(config, "TELEGRAM_PROXY", "")
     monkeypatch.setattr(config, "TELEGRAM_PROXY_AUTODETECT", True)

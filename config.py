@@ -55,6 +55,8 @@ BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 # например socks5://127.0.0.1:10808. Для SOCKS нужен пакет aiohttp-socks.
 TELEGRAM_PROXY = (os.getenv("TELEGRAM_PROXY") or "").strip()
 
+HTTPS_PROXY = (os.getenv("HTTPS_PROXY") or os.getenv("https_proxy") or "").strip()
+
 # Порт локального SOCKS5, который поднимает приложение «Киберщит».
 KIBERSHCHIT_SOCKS_HOST = "127.0.0.1"
 KIBERSHCHIT_SOCKS_PORT = 10808
@@ -85,13 +87,15 @@ SKIP_TELEGRAM = (os.getenv("SKIP_TELEGRAM") or "").strip().lower() in {
 def get_telegram_proxy() -> str:
     """Возвращает прокси для запросов к Telegram.
 
-    Явно заданный TELEGRAM_PROXY всегда имеет приоритет. Если он пуст,
-    проверяется локальный SOCKS5 Киберщита на 127.0.0.1:10808. В офлайн-
-    режиме (SKIP_TELEGRAM=1) автоподхват отключён, чтобы тесты и витрина
-    без токена не зависели от запущенного VPN-приложения.
+    Явно заданный TELEGRAM_PROXY всегда имеет приоритет, затем HTTPS_PROXY
+    окружения (например, http://proxy.server:3128 на PythonAnywhere).
+    Если оба пусты, проверяется локальный SOCKS5 Киберщита на 127.0.0.1:10808.
+    В офлайн-режиме (SKIP_TELEGRAM=1) автоподхват отключён.
     """
     if TELEGRAM_PROXY:
         return TELEGRAM_PROXY
+    if HTTPS_PROXY:
+        return HTTPS_PROXY
     if not TELEGRAM_PROXY_AUTODETECT or SKIP_TELEGRAM:
         return ""
 
