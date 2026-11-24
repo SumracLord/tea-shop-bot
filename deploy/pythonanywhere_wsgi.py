@@ -103,7 +103,12 @@ def _bootstrap() -> None:
 
     init_db()
 
-    _loop.run_until_complete(set_bot_commands(bot))
+    try:
+        _loop.run_until_complete(set_bot_commands(bot))
+    except Exception as exc:
+        logger.warning(
+            "Не удалось обновить меню команд (%s), продолжаю установку webhook", exc
+        )
     _loop.run_until_complete(
         bot.set_webhook(
             f"{base_url}{WEBHOOK_PATH}",
