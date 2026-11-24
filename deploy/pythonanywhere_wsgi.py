@@ -32,11 +32,13 @@ deploy/pythonanywhere_wsgi.py — WSGI-адаптер для PythonAnywhere.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import sys
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import parse_qs
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 if str(PROJECT_DIR) not in sys.path:
@@ -60,6 +62,92 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
 logger = logging.getLogger("tea_wsgi")
+
+
+def _report_error(message: str, exc: Exception) -> None:
+    logger.exception("%s: %s", message, exc)
+    print(f"{message}: {exc!r}", file=sys.stderr, flush=True)
+
+
+def _setup_allowed(environ: dict[str, Any]) -> bool:
+    if not WEBHOOK_SECRET:
+        return False
+    values = parse_qs(
+        str(environ.get("QUERY_STRING", "")), keep_blank_values=True
+    ).get("secret", [])
+    return bool(values) and hmac.compare_digest(
+        str(values[0]).encode(), WEBHOOK_SECRET.encode()
+    )
+
+
+def _setup_webhook(start_response: Any) -> Iterable[bytes]:
+    if config.SKIP_TELEGRAM:
+        return _respond_json(
+            start_response,
+            "503 Service Unavailable",
+            {
+                "ok": False,
+                "error": "SKIP_TELEGRAM=1: обращения к Telegram отключены",
+            },
+        )
+
+    base_url = get_public_base_url()
+    if not base_url or not base_url.startswith("https://"):
+        return _respond_json(
+            start_response,
+            "503 Service Unavailable",
+            {
+                "ok": False,
+                "error": "Задайте BASE_URL=https://<логин>.pythonanywhere.com в .env",
+                "base_url": base_url,
+            },
+        )
+
+    webhook_url = f"{base_url.rstrip('/')}{WEBHOOK_PATH}"
+    try:
+        _loop.run_until_complete(
+            bot.set_webhook(
+                url=webhook_url,
+                secret_token=WEBHOOK_SECRET,
+                drop_pending_updates=True,
+                allowed_updates=dispatcher.resolve_used_update_types(),
+            )
+        )
+    except Exception as exc:
+        _report_error("Не удалось установить webhook через /setup-webhook", exc)
+        return _respond_json(
+            start_response,
+            "502 Bad Gateway",
+            {"ok": False, "url": webhook_url, "error": str(exc)},
+        )
+
+    try:
+        info = _loop.run_until_complete(bot.get_webhook_info())
+    except Exception as exc:
+        _report_error("Не удалось получить информацию о webhook", exc)
+        return _respond_json(
+            start_response,
+            "502 Bad Gateway",
+            {
+                "ok": False,
+                "url": webhook_url,
+                "error": f"Webhook установлен, но проверить его не удалось: {exc}",
+            },
+        )
+
+    return _respond_json(
+        start_response,
+        "200 OK",
+        {
+            "ok": True,
+            "url": str(info.url or ""),
+            "pending_update_count": info.pending_update_count,
+            "last_error_message": info.last_error_message,
+            "expected_url": webhook_url,
+            "proxy_configured": bool(config.get_telegram_proxy()),
+        },
+    )
+
 
 # PythonAnywhere держит процесс живым: используем один event loop,
 # чтобы aiohttp-сессия бота не привязывалась к разным loop'ам.
@@ -125,8 +213,8 @@ def _bootstrap() -> None:
 # недоступен, приложение не падает: повторная попытка будет при запросе.
 try:
     _bootstrap()
-except Exception:
-    logger.exception("Не удалось выполнить начальную настройку")
+except Exception as exc:
+    _report_error("Не удалось выполнить начальную настройку", exc)
 
 
 def _read_body(environ: dict[str, Any]) -> bytes:
@@ -204,18 +292,44 @@ def application(environ: dict[str, Any], start_response: Any) -> Iterable[bytes]
             {"status": "ok" if ok else "error", "database": config.DATABASE_BACKEND},
         )
 
+    if path == "/setup-webhook":
+        if method != "GET":
+            return _respond_json(start_response, "405 Method Not Allowed", {"error": "method"})
+        if not WEBHOOK_SECRET:
+            return _respond_json(
+                start_response,
+                "503 Service Unavailable",
+                {
+                    "ok": False,
+                    "error": "WEBHOOK_SECRET не задан в .env",
+                },
+            )
+        if not _setup_allowed(environ):
+            return _respond_json(
+                start_response,
+                "403 Forbidden",
+                {
+                    "ok": False,
+                    "error": "secret",
+                    "hint": "Откройте /setup-webhook?secret=<WEBHOOK_SECRET>",
+                },
+            )
+        return _setup_webhook(start_response)
+
     if path == WEBHOOK_PATH:
         if method != "POST":
             return _respond_json(start_response, "405 Method Not Allowed", {"error": "method"})
 
-        received_secret = environ.get("HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN", "")
-        if WEBHOOK_SECRET and received_secret != WEBHOOK_SECRET:
+        received_secret = str(environ.get("HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN", ""))
+        if WEBHOOK_SECRET and not hmac.compare_digest(
+            received_secret.encode(), WEBHOOK_SECRET.encode()
+        ):
             return _respond_json(start_response, "403 Forbidden", {"error": "secret"})
 
         try:
             _bootstrap()
-        except Exception:
-            logger.exception("Не удалось подготовить webhook")
+        except Exception as exc:
+            _report_error("Не удалось подготовить webhook", exc)
             return _respond_json(
                 start_response,
                 "503 Service Unavailable",
@@ -226,8 +340,8 @@ def application(environ: dict[str, Any], start_response: Any) -> Iterable[bytes]
             payload = json.loads(_read_body(environ).decode("utf-8"))
             update = Update.model_validate(payload, context={"bot": bot})
             _loop.run_until_complete(dispatcher.feed_update(bot, update))
-        except Exception:
-            logger.exception("Ошибка обработки обновления")
+        except Exception as exc:
+            _report_error("Ошибка обработки обновления", exc)
             return _respond_json(
                 start_response,
                 "500 Internal Server Error",
